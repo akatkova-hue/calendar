@@ -191,6 +191,13 @@
   function loadEvents(){try{return JSON.parse(localStorage.getItem(STORE_KEY))||[];}catch(e){return [];}}
   function saveEvents(){try{localStorage.setItem(STORE_KEY,JSON.stringify(events));}catch(e){}}
 
+  /* ---------- overlap check ---------- */
+  // Two events on the same day overlap if their [start, start+dur) ranges intersect.
+  function overlaps(date,start,dur,ignoreId){
+    const end=start+dur;
+    return events.some(ev=>ev.id!==ignoreId && ev.date===date && start<(ev.start+ev.dur) && end>ev.start);
+  }
+
   /* ---------- build grid ---------- */
   function buildHead(){
     calHead.innerHTML='<div class="corner"></div>';
@@ -303,9 +310,14 @@
       if(!dragging)return;
       dragging=false;el.classList.remove("dragging");
       if(moved&&el._pendingDay!=null){
-        ev.date=ymd(addDays(weekStart,el._pendingDay));
-        ev.start=el._pendingMin;
-        saveEvents();renderEvents();
+        const newDate=ymd(addDays(weekStart,el._pendingDay));
+        if(overlaps(newDate,el._pendingMin,ev.dur,ev.id)){
+          renderEvents(); // would overlap another event: snap back to original spot
+        }else{
+          ev.date=newDate;
+          ev.start=el._pendingMin;
+          saveEvents();renderEvents();
+        }
       }else if(!moved){
         openModal(ev);
       }
@@ -347,6 +359,9 @@
     const start=parseTime(document.getElementById("fStart").value||"09:00");
     const dur=parseInt(document.getElementById("fDur").value,10);
     if(!date){alert("Please choose a date.");return;}
+    if(overlaps(date,start,dur,editingId)){
+      alert("That time overlaps another event. Please pick a free time slot.");return;
+    }
     if(editingId){
       const ev=events.find(x=>x.id===editingId);
       Object.assign(ev,{title,date,start,dur,color:pickedColor});
