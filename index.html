@@ -70,6 +70,11 @@
   .event .ev-title{font-weight:800;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;}
   .event .ev-time{opacity:.92;font-size:11px;font-weight:700;}
   .event .ev-meta{opacity:.9;font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .event .ev-resize{position:absolute;left:0;right:0;bottom:0;height:11px;cursor:ns-resize;border-radius:0 0 14px 14px;}
+  .event .ev-resize:hover{background:rgba(255,255,255,.3);}
+  .event .ev-resize::after{content:"";position:absolute;left:50%;bottom:3px;width:22px;height:3px;
+    margin-left:-11px;border-radius:2px;background:rgba(255,255,255,.5);opacity:0;transition:opacity .12s;}
+  .event:hover .ev-resize::after{opacity:1;}
 
   /* Modal */
   .overlay{position:fixed;inset:0;background:rgba(43,39,64,.5);backdrop-filter:blur(3px);display:none;
@@ -308,6 +313,12 @@
     else saveLocal();
     renderEvents();
   }
+  function resizeEvent(ev,newDur){
+    ev.dur=newDur;
+    if(useCloud){ db.from("events").update({dur_min:newDur}).eq("id",ev.id).then(({error})=>{if(error)console.error(error);}); }
+    else saveLocal();
+    renderEvents();
+  }
   function removeEvent(id){
     events=events.filter(x=>x.id!==id);
     if(useCloud){ db.from("events").delete().eq("id",id).then(({error})=>{if(error)console.error(error);}); }
@@ -398,7 +409,9 @@
     if(ev.location && ev.dur>=60) html+='<div class="ev-meta">'+escapeHtml(ev.location)+'</div>';
     if(ev.invited && ev.dur>=90) html+='<div class="ev-meta">with '+escapeHtml(ev.invited)+'</div>';
     el.innerHTML=html;
+    const rz=document.createElement("div");rz.className="ev-resize";el.appendChild(rz);
     attachDrag(el,ev);
+    attachResize(rz,ev);
     return el;
   }
 
@@ -444,6 +457,39 @@
         }
       }else if(!moved){
         openModal(ev);
+      }
+    });
+  }
+
+  /* ---------- drag bottom edge to resize (change length) ---------- */
+  function attachResize(handle,ev){
+    let resizing=false,colRect=null,pendingDur=ev.dur;
+    handle.addEventListener("pointerdown",function(e){
+      if(e.button!==0)return;
+      e.stopPropagation(); // don't start a move-drag
+      resizing=true;pendingDur=ev.dur;
+      const col=handle.closest(".daycol");
+      colRect=col?col.getBoundingClientRect():null;
+      try{handle.setPointerCapture(e.pointerId);}catch(_){}
+      handle.parentElement.classList.add("dragging");
+    });
+    handle.addEventListener("pointermove",function(e){
+      if(!resizing||!colRect)return;
+      e.stopPropagation();
+      let endMin=Math.round((e.clientY-colRect.top)/HOUR_H*60/SNAP)*SNAP;
+      let nd=endMin-ev.start;
+      nd=Math.max(SNAP,Math.min(DAY_MIN-ev.start,nd));
+      pendingDur=nd;
+      handle.parentElement.style.height=Math.max(18,(nd/60*HOUR_H)-2)+"px";
+    });
+    handle.addEventListener("pointerup",function(e){
+      if(!resizing)return;
+      e.stopPropagation();
+      resizing=false;
+      handle.parentElement.classList.remove("dragging");
+      if(pendingDur && pendingDur!==ev.dur){
+        if(overlaps(ev.date,ev.start,pendingDur,ev.id)){ renderEvents(); } // would overlap: snap back
+        else { resizeEvent(ev,pendingDur); }
       }
     });
   }
