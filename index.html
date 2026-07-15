@@ -7,6 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<!-- Supabase JS (powers live shared schedules; free plan is fine for personal use) -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root{
     --bg1:#fef5ff; --bg2:#eef4ff; --bg3:#fff7ec;
@@ -94,7 +96,16 @@
   .btn-danger:hover{background:#ffd9e5 !important;}
   .row2{display:flex;gap:10px;}
   .row2 .field{flex:1;}
-  .hint{padding:9px 26px;color:var(--muted);font-size:13px;font-weight:700;}
+  .hint{padding:9px 26px;color:var(--muted);font-size:13px;font-weight:700;
+    display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;}
+  .status{display:inline-flex;align-items:center;white-space:nowrap;}
+  .status .dot{width:9px;height:9px;border-radius:50%;margin-right:7px;background:#c9c8d6;}
+  .status.on .dot{background:#22c3a6;box-shadow:0 0 0 3px rgba(34,195,166,.2);}
+
+  #toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(20px);
+    background:var(--text);color:#fff;padding:11px 20px;border-radius:14px;font-weight:700;font-size:14px;
+    box-shadow:0 8px 24px rgba(0,0,0,.3);opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:200;}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 </style>
 </head>
 <body>
@@ -105,9 +116,13 @@
     <button id="todayBtn">Today</button>
     <span class="range" id="rangeLabel"></span>
     <span class="spacer"></span>
+    <button id="shareBtn">Share link</button>
     <button class="btn-primary" id="addBtn">+ New event</button>
   </header>
-  <div class="hint">Click an empty slot to add an event · drag an event to move it · click an event to edit.</div>
+  <div class="hint">
+    <span>Click an empty slot to add an event · drag an event to move it · click an event to edit.</span>
+    <span class="status" id="status"><span class="dot"></span><span id="statusText"></span></span>
+  </div>
 
   <div class="cal-wrap">
     <div class="cal">
@@ -160,6 +175,53 @@
     </div>
   </div>
 
+  <div id="toast"></div>
+
+<!-- =====================================================================
+     SUPABASE SETUP (for shared, live-collaborative schedules)
+     ---------------------------------------------------------------------
+     Until you paste your own keys below, the planner works on its own
+     (events save in your browser only). To let multiple people share and
+     edit ONE schedule live, do this once:
+
+       1. Go to https://supabase.com and create a free account + project
+          (the free "passion projects" plan is fine for personal use).
+       2. In the project, open the "SQL Editor", paste the block below,
+          and click Run. It creates the table, opens access for link-based
+          sharing, and turns on realtime:
+
+            create table if not exists events (
+              id text primary key,
+              schedule_id text not null,
+              title text,
+              date text,
+              start_min int,
+              dur_min int,
+              color text,
+              created_at timestamptz default now()
+            );
+            create index if not exists events_schedule_idx on events (schedule_id);
+            alter table events enable row level security;
+            create policy "public access" on events
+              for all using (true) with check (true);
+            alter publication supabase_realtime add table events;
+
+       3. In the project, open "Project Settings > API". Copy the
+          "Project URL" and the "anon public" key.
+       4. Paste those two values into the object below, replacing the
+          "PASTE_..." placeholders.
+
+     Then deploy, open the site, click "Share link", and send it.
+     Everyone who opens the link edits the same schedule, live.
+     ===================================================================== -->
+<script>
+  // >>> PASTE YOUR SUPABASE VALUES HERE <<<
+  window.supabaseConfig = {
+    url: "https://okzkkkzbysmnmwrmdjqk.supabase.co",        // e.g. https://abcdefgh.supabase.co
+    anonKey: "sb_publishable_3GMWcMgGR-whJQOROTX1tA_eIZVTwdY" // the "anon public" key (safe to expose)
+  };
+</script>
+
 <script>
 (function(){
   "use strict";
@@ -169,7 +231,7 @@
   const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   const STORE_KEY = "weekly-planner-events-v1";
 
-  let events = loadEvents();
+  let events = [];
   let weekStart = startOfWeek(new Date());
   let editingId = null;
   let pickedColor = COLORS[0];
@@ -179,6 +241,26 @@
   const rangeLabel = document.getElementById("rangeLabel");
   const overlay = document.getElementById("overlay");
 
+  /* ---------- schedule id (the shareable link) ---------- */
+  function randomId(){let s="";const a="abcdefghijkmnpqrstuvwxyz23456789";for(let i=0;i<16;i++)s+=a[Math.floor(Math.random()*a.length)];return s;}
+  function getScheduleId(){
+    let id=(location.hash||"").replace(/^#/,"").trim();
+    if(!id){id=randomId();try{history.replaceState(null,"","#"+id);}catch(e){location.hash=id;}}
+    return id;
+  }
+  const scheduleId = getScheduleId();
+
+  /* ---------- Supabase (optional) ---------- */
+  const scfg = window.supabaseConfig || {};
+  const CONFIGURED = !!scfg.url && scfg.url.indexOf("PASTE")===-1 &&
+                     !!scfg.anonKey && scfg.anonKey.indexOf("PASTE")===-1 &&
+                     typeof supabase !== "undefined";
+  let useCloud = false, db = null;
+  if(CONFIGURED){
+    try{ db = supabase.createClient(scfg.url, scfg.anonKey); useCloud = true; }
+    catch(e){ console.error("Supabase init failed, using local-only mode:",e); useCloud=false; }
+  }
+
   /* ---------- date helpers ---------- */
   function startOfWeek(d){const x=new Date(d);x.setHours(0,0,0,0);x.setDate(x.getDate()-x.getDay());return x;}
   function addDays(d,n){const x=new Date(d);x.setDate(x.getDate()+n);return x;}
@@ -187,9 +269,47 @@
   function fmtTime(min){let h=Math.floor(min/60),m=min%60;const ap=h<12?"AM":"PM";let hh=h%12;if(hh===0)hh=12;
     return hh+(m?":"+String(m).padStart(2,"0"):"")+" "+ap;}
 
-  /* ---------- storage ---------- */
-  function loadEvents(){try{return JSON.parse(localStorage.getItem(STORE_KEY))||[];}catch(e){return [];}}
-  function saveEvents(){try{localStorage.setItem(STORE_KEY,JSON.stringify(events));}catch(e){}}
+  /* ---------- storage (local fallback) ---------- */
+  function localKey(){return STORE_KEY+":"+scheduleId;}
+  function loadLocal(){try{return JSON.parse(localStorage.getItem(localKey()))||[];}catch(e){return [];}}
+  function saveLocal(){try{localStorage.setItem(localKey(),JSON.stringify(events));}catch(e){}}
+  function genId(){return Date.now()+"-"+Math.random().toString(36).slice(2,7);}
+
+  /* ---------- cloud row mapping ---------- */
+  function rowToEv(r){return {id:r.id,title:r.title,date:r.date,start:r.start_min,dur:r.dur_min,color:r.color};}
+  function evToRow(id,d){return {id:id,schedule_id:scheduleId,title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color};}
+
+  async function fetchAll(){
+    const {data,error}=await db.from("events").select("*").eq("schedule_id",scheduleId);
+    if(error){console.error("Load error:",error);toast("Load error — check table & policies.");return;}
+    events=(data||[]).map(rowToEv);
+    renderEvents();
+  }
+
+  /* ---------- data writes (route to Supabase or localStorage) ---------- */
+  function addEvent(d){
+    const id=genId();
+    events.push(Object.assign({id},d)); // optimistic
+    if(useCloud){ db.from("events").insert(evToRow(id,d)).then(({error})=>{if(error){console.error(error);toast("Save failed.");}}); }
+    else saveLocal();
+  }
+  function updateEvent(id,d){
+    const ev=events.find(x=>x.id===id); if(ev) Object.assign(ev,d);
+    if(useCloud){ db.from("events").update({title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color}).eq("id",id).then(({error})=>{if(error)console.error(error);}); }
+    else saveLocal();
+  }
+  function moveEvent(ev,newDate,newStart){
+    ev.date=newDate; ev.start=newStart;
+    if(useCloud){ db.from("events").update({date:newDate,start_min:newStart}).eq("id",ev.id).then(({error})=>{if(error)console.error(error);}); }
+    else saveLocal();
+    renderEvents();
+  }
+  function removeEvent(id){
+    events=events.filter(x=>x.id!==id);
+    if(useCloud){ db.from("events").delete().eq("id",id).then(({error})=>{if(error)console.error(error);}); }
+    else saveLocal();
+    renderEvents();
+  }
 
   /* ---------- overlap check ---------- */
   // Two events on the same day overlap if their [start, start+dur) ranges intersect.
@@ -256,8 +376,7 @@
     events.forEach(ev=>{
       for(let i=0;i<7;i++){
         if(ev.date===ymd(addDays(weekStart,i))){
-          const el=makeEventEl(ev);
-          cols[i].appendChild(el);
+          cols[i].appendChild(makeEventEl(ev));
         }
       }
     });
@@ -276,7 +395,7 @@
     return el;
   }
 
-  function escapeHtml(s){return s.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+  function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 
   /* ---------- drag to move ---------- */
   function attachDrag(el,ev){
@@ -312,11 +431,9 @@
       if(moved&&el._pendingDay!=null){
         const newDate=ymd(addDays(weekStart,el._pendingDay));
         if(overlaps(newDate,el._pendingMin,ev.dur,ev.id)){
-          renderEvents(); // would overlap another event: snap back to original spot
+          renderEvents(); // would overlap another event: snap back
         }else{
-          ev.date=newDate;
-          ev.start=el._pendingMin;
-          saveEvents();renderEvents();
+          moveEvent(ev,newDate,el._pendingMin);
         }
       }else if(!moved){
         openModal(ev);
@@ -363,31 +480,57 @@
       alert("That time overlaps another event. Please pick a free time slot.");return;
     }
     if(editingId){
-      const ev=events.find(x=>x.id===editingId);
-      Object.assign(ev,{title,date,start,dur,color:pickedColor});
+      updateEvent(editingId,{title,date,start,dur,color:pickedColor});
     }else{
-      events.push({id:Date.now()+"-"+Math.random().toString(36).slice(2,7),title,date,start,dur,color:pickedColor});
+      addEvent({title,date,start,dur,color:pickedColor});
     }
-    saveEvents();closeModal();
-    const d=new Date(date+"T00:00:00");weekStart=startOfWeek(d);
+    closeModal();
+    weekStart=startOfWeek(new Date(date+"T00:00:00"));
     buildHead();buildBody();
   });
   document.getElementById("deleteBtn").addEventListener("click",function(){
-    events=events.filter(x=>x.id!==editingId);saveEvents();closeModal();renderEvents();
+    if(editingId) removeEvent(editingId);
+    closeModal();
   });
   document.getElementById("cancelBtn").addEventListener("click",closeModal);
   overlay.addEventListener("click",e=>{if(e.target===overlay)closeModal();});
   document.addEventListener("keydown",e=>{if(e.key==="Escape")closeModal();});
 
-  /* ---------- nav ---------- */
-  document.getElementById("prevBtn").addEventListener("click",()=>{weekStart=addDays(weekStart,-7);buildHead();buildBody();});
-  document.getElementById("nextBtn").addEventListener("click",()=>{weekStart=addDays(weekStart,7);buildHead();buildBody();});
-  document.getElementById("todayBtn").addEventListener("click",()=>{weekStart=startOfWeek(new Date());buildHead();buildBody();});
-  document.getElementById("addBtn").addEventListener("click",()=>openModal(null));
+  /* ---------- share ---------- */
+  let toastTimer=null;
+  function toast(msg){
+    const t=document.getElementById("toast");
+    t.textContent=msg;t.classList.add("show");
+    clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove("show"),2400);
+  }
+  document.getElementById("shareBtn").addEventListener("click",function(){
+    const url=location.href;
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(url).then(()=>toast(useCloud?"Link copied! Anyone with it can edit this schedule.":"Link copied!"))
+        .catch(()=>window.prompt("Copy this link:",url));
+    }else{window.prompt("Copy this link:",url);}
+  });
+
+  /* ---------- status ---------- */
+  function updateStatus(){
+    const s=document.getElementById("status");
+    const txt=document.getElementById("statusText");
+    if(useCloud){s.classList.add("on");txt.textContent="Live sharing on — anyone with the link can edit";}
+    else{s.classList.remove("on");txt.textContent="Solo mode — add Supabase keys to share & collaborate";}
+  }
 
   /* ---------- init ---------- */
+  if(!useCloud){events=loadLocal();}
   buildHead();buildBody();
-  // scroll to 7am on load
+  updateStatus();
+  if(useCloud){
+    fetchAll();
+    db.channel("schedule-"+scheduleId)
+      .on("postgres_changes",
+          {event:"*",schema:"public",table:"events",filter:"schedule_id=eq."+scheduleId},
+          function(){ fetchAll(); })
+      .subscribe();
+  }
   document.querySelector(".cal-wrap").scrollTop=7*HOUR_H;
 })();
 </script>
