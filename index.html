@@ -68,6 +68,7 @@
     box-shadow:0 3px 10px rgba(0,0,0,.16);z-index:2;}
   .event.dragging{opacity:.9;cursor:grabbing;z-index:20;box-shadow:0 10px 24px rgba(0,0,0,.3);transform:scale(1.02);}
   .event .ev-title{font-weight:800;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;}
+  .event .ev-rep{font-size:11px;opacity:.85;}
   .event .ev-time{opacity:.92;font-size:11px;font-weight:700;}
   .event .ev-meta{opacity:.9;font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .event .ev-resize{position:absolute;left:0;right:0;bottom:0;height:11px;cursor:ns-resize;border-radius:0 0 14px 14px;}
@@ -170,6 +171,16 @@
         <input type="text" id="fInvited" placeholder="names or emails, comma-separated" autocomplete="off">
       </div>
       <div class="field">
+        <label>Repeat</label>
+        <select id="fRepeat">
+          <option value="none">Does not repeat</option>
+          <option value="daily">Every day</option>
+          <option value="weekly">Every week</option>
+          <option value="monthly">Every month</option>
+          <option value="yearly">Every year</option>
+        </select>
+      </div>
+      <div class="field">
         <label>Color</label>
         <div class="colors" id="colorPicker"></div>
       </div>
@@ -207,6 +218,7 @@
               color text,
               location text,
               invited text,
+              repeat text,
               created_at timestamptz default now()
             );
             create index if not exists events_schedule_idx on events (schedule_id);
@@ -285,8 +297,8 @@
   function genId(){return Date.now()+"-"+Math.random().toString(36).slice(2,7);}
 
   /* ---------- cloud row mapping ---------- */
-  function rowToEv(r){return {id:r.id,title:r.title,date:r.date,start:r.start_min,dur:r.dur_min,color:r.color,location:r.location||"",invited:r.invited||""};}
-  function evToRow(id,d){return {id:id,schedule_id:scheduleId,title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color,location:d.location||null,invited:d.invited||null};}
+  function rowToEv(r){return {id:r.id,title:r.title,date:r.date,start:r.start_min,dur:r.dur_min,color:r.color,location:r.location||"",invited:r.invited||"",repeat:r.repeat||"none"};}
+  function evToRow(id,d){return {id:id,schedule_id:scheduleId,title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color,location:d.location||null,invited:d.invited||null,repeat:d.repeat||"none"};}
 
   async function fetchAll(){
     const {data,error}=await db.from("events").select("*").eq("schedule_id",scheduleId);
@@ -304,7 +316,7 @@
   }
   function updateEvent(id,d){
     const ev=events.find(x=>x.id===id); if(ev) Object.assign(ev,d);
-    if(useCloud){ db.from("events").update({title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color,location:d.location||null,invited:d.invited||null}).eq("id",id).then(({error})=>{if(error)console.error(error);}); }
+    if(useCloud){ db.from("events").update({title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color,location:d.location||null,invited:d.invited||null,repeat:d.repeat||"none"}).eq("id",id).then(({error})=>{if(error)console.error(error);}); }
     else saveLocal();
   }
   function moveEvent(ev,newDate,newStart){
@@ -326,11 +338,24 @@
     renderEvents();
   }
 
-  /* ---------- overlap check ---------- */
-  // Two events on the same day overlap if their [start, start+dur) ranges intersect.
+  /* ---------- recurrence + overlap ---------- */
+  // Does event ev occur on the given YYYY-MM-DD date (accounting for repeat)?
+  function occursOn(ev,dateStr){
+    if(!ev.repeat||ev.repeat==="none") return ev.date===dateStr;
+    const b=new Date(ev.date+"T00:00:00"), t=new Date(dateStr+"T00:00:00");
+    if(t<b) return false; // recurrence starts on the event's own date
+    switch(ev.repeat){
+      case "daily": return true;
+      case "weekly": return t.getDay()===b.getDay();
+      case "monthly": return t.getDate()===b.getDate();
+      case "yearly": return t.getMonth()===b.getMonth() && t.getDate()===b.getDate();
+    }
+    return false;
+  }
+  // Two events overlap on a day if both occur that day and their [start,end) ranges intersect.
   function overlaps(date,start,dur,ignoreId){
     const end=start+dur;
-    return events.some(ev=>ev.id!==ignoreId && ev.date===date && start<(ev.start+ev.dur) && end>ev.start);
+    return events.some(ev=>ev.id!==ignoreId && occursOn(ev,date) && start<(ev.start+ev.dur) && end>ev.start);
   }
 
   /* ---------- build grid ---------- */
@@ -390,7 +415,7 @@
     const cols=dayColumns();
     events.forEach(ev=>{
       for(let i=0;i<7;i++){
-        if(ev.date===ymd(addDays(weekStart,i))){
+        if(occursOn(ev,ymd(addDays(weekStart,i)))){
           cols[i].appendChild(makeEventEl(ev));
         }
       }
@@ -404,7 +429,8 @@
     el.style.top=(ev.start/60*HOUR_H)+"px";
     el.style.height=Math.max(18,(ev.dur/60*HOUR_H)-2)+"px";
     el.dataset.id=ev.id;
-    let html='<div class="ev-title">'+escapeHtml(ev.title||"Untitled")+'</div>';
+    const rep=(ev.repeat&&ev.repeat!=="none")?' <span class="ev-rep" title="Repeats '+ev.repeat+'">↻</span>':'';
+    let html='<div class="ev-title">'+escapeHtml(ev.title||"Untitled")+rep+'</div>';
     if(ev.dur>=30) html+='<div class="ev-time">'+fmtTime(ev.start)+' – '+fmtTime(ev.start+ev.dur)+'</div>';
     if(ev.location && ev.dur>=60) html+='<div class="ev-meta">'+escapeHtml(ev.location)+'</div>';
     if(ev.invited && ev.dur>=90) html+='<div class="ev-meta">with '+escapeHtml(ev.invited)+'</div>';
@@ -517,6 +543,7 @@
     document.getElementById("fEnd").value=toHM(endMin);
     document.getElementById("fLoc").value=ev&&ev.location?ev.location:"";
     document.getElementById("fInvited").value=ev&&ev.invited?ev.invited:"";
+    document.getElementById("fRepeat").value=ev&&ev.repeat?ev.repeat:"none";
     pickedColor=ev?ev.color:COLORS[Math.floor(Math.random()*COLORS.length)];
     syncSwatches();
     overlay.classList.add("open");
@@ -534,6 +561,7 @@
     const end=parseTime(document.getElementById("fEnd").value||"10:00");
     const location=document.getElementById("fLoc").value.trim();
     const invited=document.getElementById("fInvited").value.trim();
+    const repeat=document.getElementById("fRepeat").value;
     if(!date){alert("Please choose a date.");return;}
     if(end<=start){alert("End time must be after the start time.");return;}
     const dur=end-start;
@@ -541,9 +569,9 @@
       alert("That time overlaps another event. Please pick a free time slot.");return;
     }
     if(editingId){
-      updateEvent(editingId,{title,date,start,dur,color:pickedColor,location,invited});
+      updateEvent(editingId,{title,date,start,dur,color:pickedColor,location,invited,repeat});
     }else{
-      addEvent({title,date,start,dur,color:pickedColor,location,invited});
+      addEvent({title,date,start,dur,color:pickedColor,location,invited,repeat});
     }
     closeModal();
     weekStart=startOfWeek(new Date(date+"T00:00:00"));
