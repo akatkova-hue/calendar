@@ -78,6 +78,11 @@
   .event .ev-resize::after{content:"";position:absolute;left:50%;bottom:3px;width:22px;height:3px;
     margin-left:-11px;border-radius:2px;background:rgba(255,255,255,.5);opacity:0;transition:opacity .12s;}
   .event:hover .ev-resize::after{opacity:1;}
+  .event .ev-resize-top{position:absolute;left:0;right:0;top:0;height:11px;cursor:ns-resize;border-radius:14px 14px 0 0;}
+  .event .ev-resize-top:hover{background:rgba(255,255,255,.3);}
+  .event .ev-resize-top::after{content:"";position:absolute;left:50%;top:3px;width:22px;height:3px;
+    margin-left:-11px;border-radius:2px;background:rgba(255,255,255,.5);opacity:0;transition:opacity .12s;}
+  .event:hover .ev-resize-top::after{opacity:1;}
 
   /* Modal */
   .overlay{position:fixed;inset:0;background:rgba(43,39,64,.5);backdrop-filter:blur(3px);display:none;
@@ -333,6 +338,12 @@
     else saveLocal();
     renderEvents();
   }
+  function reshapeEvent(ev,newStart,newDur){
+    ev.start=newStart; ev.dur=newDur;
+    if(useCloud){ db.from("events").update({start_min:newStart,dur_min:newDur}).eq("id",ev.id).then(({error})=>{if(error)console.error(error);}); }
+    else saveLocal();
+    renderEvents();
+  }
   function removeEvent(id){
     events=events.filter(x=>x.id!==id);
     if(useCloud){ db.from("events").delete().eq("id",id).then(({error})=>{if(error)console.error(error);}); }
@@ -454,6 +465,10 @@
       const rz=document.createElement("div");rz.className="ev-resize";el.appendChild(rz);
       attachResize(rz,ev,part);
     }
+    if(part==="full"||part==="head"){
+      const rzt=document.createElement("div");rzt.className="ev-resize-top";el.appendChild(rzt);
+      attachResizeTop(rzt,ev,part);
+    }
     if(part==="tail"){
       el.style.cursor="pointer";
       el.addEventListener("click",function(e){ if(e.target.classList.contains("ev-resize"))return; openModal(ev); });
@@ -545,6 +560,40 @@
       if(pendingDur && pendingDur!==ev.dur){
         if(part!=="tail" && overlaps(ev.date,ev.start,pendingDur,ev.id)){ renderEvents(); } // would overlap: snap back
         else { resizeEvent(ev,pendingDur); }
+      }
+    });
+  }
+
+  /* ---------- drag top edge to resize (change start time) ---------- */
+  function attachResizeTop(handle,ev,part){
+    let resizing=false,colRect=null,oldEnd=ev.start+ev.dur,pStart=ev.start,pDur=ev.dur;
+    handle.addEventListener("pointerdown",function(e){
+      if(e.button!==0)return;
+      e.stopPropagation();
+      resizing=true;oldEnd=ev.start+ev.dur;pStart=ev.start;pDur=ev.dur;
+      const col=handle.closest(".daycol");
+      colRect=col?col.getBoundingClientRect():null;
+      try{handle.setPointerCapture(e.pointerId);}catch(_){}
+      handle.parentElement.classList.add("dragging");
+    });
+    handle.addEventListener("pointermove",function(e){
+      if(!resizing||!colRect)return;
+      e.stopPropagation();
+      let mins=Math.round((e.clientY-colRect.top)/HOUR_H*60/SNAP)*SNAP;
+      let ns=Math.max(0,Math.min(oldEnd-SNAP,Math.min(DAY_MIN-SNAP,mins)));
+      pStart=ns;pDur=oldEnd-ns;
+      const disp=Math.min(DAY_MIN,oldEnd)-ns;
+      handle.parentElement.style.top=(ns/60*HOUR_H)+"px";
+      handle.parentElement.style.height=Math.max(18,(disp/60*HOUR_H)-2)+"px";
+    });
+    handle.addEventListener("pointerup",function(e){
+      if(!resizing)return;
+      e.stopPropagation();
+      resizing=false;
+      handle.parentElement.classList.remove("dragging");
+      if(pStart!==ev.start || pDur!==ev.dur){
+        if(overlaps(ev.date,pStart,pDur,ev.id)){ renderEvents(); } // would overlap: snap back
+        else { reshapeEvent(ev,pStart,pDur); }
       }
     });
   }
