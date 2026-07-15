@@ -67,6 +67,8 @@
     color:#fff;font-size:12px;line-height:1.3;cursor:grab;user-select:none;
     box-shadow:0 3px 10px rgba(0,0,0,.16);z-index:2;}
   .event.dragging{opacity:.9;cursor:grabbing;z-index:20;box-shadow:0 10px 24px rgba(0,0,0,.3);transform:scale(1.02);}
+  .event.cont-head{border-bottom-left-radius:5px;border-bottom-right-radius:5px;}
+  .event.cont-tail{border-top-left-radius:5px;border-top-right-radius:5px;}
   .event .ev-title{font-weight:800;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;}
   .event .ev-rep{font-size:11px;opacity:.85;}
   .event .ev-time{opacity:.92;font-size:11px;font-weight:700;}
@@ -413,31 +415,51 @@
   function renderEvents(){
     calBody.querySelectorAll(".event").forEach(e=>e.remove());
     const cols=dayColumns();
-    events.forEach(ev=>{
-      for(let i=0;i<7;i++){
-        if(occursOn(ev,ymd(addDays(weekStart,i)))){
-          cols[i].appendChild(makeEventEl(ev));
+    for(let i=0;i<7;i++){
+      const dayStr=ymd(addDays(weekStart,i));
+      const prevStr=ymd(addDays(weekStart,i-1));
+      events.forEach(ev=>{
+        const endAbs=ev.start+ev.dur;
+        // main block on the event's own day (clipped at midnight if it spills over)
+        if(occursOn(ev,dayStr)){
+          const bottom=Math.min(DAY_MIN,endAbs);
+          cols[i].appendChild(makeEventEl(ev, endAbs>DAY_MIN?"head":"full", ev.start, bottom-ev.start));
         }
-      }
-    });
+        // continuation block: the part that spilled past midnight from the previous day
+        if(endAbs>DAY_MIN && occursOn(ev,prevStr)){
+          cols[i].appendChild(makeEventEl(ev, "tail", 0, endAbs-DAY_MIN));
+        }
+      });
+    }
   }
 
-  function makeEventEl(ev){
+  function makeEventEl(ev,part,topMin,heightMin){
+    part=part||"full";
     const el=document.createElement("div");
-    el.className="event";
+    el.className="event"+(part==="head"?" cont-head":part==="tail"?" cont-tail":"");
     el.style.background=ev.color;
-    el.style.top=(ev.start/60*HOUR_H)+"px";
-    el.style.height=Math.max(18,(ev.dur/60*HOUR_H)-2)+"px";
+    el.style.top=(topMin/60*HOUR_H)+"px";
+    el.style.height=Math.max(18,(heightMin/60*HOUR_H)-2)+"px";
     el.dataset.id=ev.id;
+    const endAbs=ev.start+ev.dur;
     const rep=(ev.repeat&&ev.repeat!=="none")?' <span class="ev-rep" title="Repeats '+ev.repeat+'">↻</span>':'';
-    let html='<div class="ev-title">'+escapeHtml(ev.title||"Untitled")+rep+'</div>';
-    if(ev.dur>=30) html+='<div class="ev-time">'+fmtTime(ev.start)+' – '+fmtTime(ev.start+ev.dur)+'</div>';
-    if(ev.location && ev.dur>=60) html+='<div class="ev-meta">'+escapeHtml(ev.location)+'</div>';
-    if(ev.invited && ev.dur>=90) html+='<div class="ev-meta">with '+escapeHtml(ev.invited)+'</div>';
+    const cont=part==="tail"?' <span class="ev-rep">(cont.)</span>':'';
+    let html='<div class="ev-title">'+escapeHtml(ev.title||"Untitled")+rep+cont+'</div>';
+    if(heightMin>=30) html+='<div class="ev-time">'+fmtTime(ev.start)+' – '+fmtTime(endAbs%DAY_MIN)+'</div>';
+    if(ev.location && heightMin>=60) html+='<div class="ev-meta">'+escapeHtml(ev.location)+'</div>';
+    if(ev.invited && heightMin>=90) html+='<div class="ev-meta">with '+escapeHtml(ev.invited)+'</div>';
     el.innerHTML=html;
-    const rz=document.createElement("div");rz.className="ev-resize";el.appendChild(rz);
-    attachDrag(el,ev);
-    attachResize(rz,ev);
+    // resize handle lives on the block containing the true end (full or the overnight tail)
+    if(part==="full"||part==="tail"){
+      const rz=document.createElement("div");rz.className="ev-resize";el.appendChild(rz);
+      attachResize(rz,ev,part);
+    }
+    if(part==="tail"){
+      el.style.cursor="pointer";
+      el.addEventListener("click",function(e){ if(e.target.classList.contains("ev-resize"))return; openModal(ev); });
+    }else{
+      attachDrag(el,ev); // head/full blocks can be moved
+    }
     return el;
   }
 
@@ -466,7 +488,7 @@
       if(!target){target=cols[dayIdx];}
       const r=target.getBoundingClientRect();
       let min=Math.round((e.clientY-grabOffset-r.top)/HOUR_H*60/SNAP)*SNAP;
-      min=Math.max(0,Math.min(DAY_MIN-ev.dur,min));
+      min=Math.max(0,Math.min(DAY_MIN-SNAP,min));
       el._pendingDay=dayIdx;el._pendingMin=min;
       if(el.parentElement!==target)target.appendChild(el);
       el.style.top=(min/60*HOUR_H)+"px";
@@ -488,7 +510,7 @@
   }
 
   /* ---------- drag bottom edge to resize (change length) ---------- */
-  function attachResize(handle,ev){
+  function attachResize(handle,ev,part){
     let resizing=false,colRect=null,pendingDur=ev.dur;
     handle.addEventListener("pointerdown",function(e){
       if(e.button!==0)return;
@@ -502,11 +524,18 @@
     handle.addEventListener("pointermove",function(e){
       if(!resizing||!colRect)return;
       e.stopPropagation();
-      let endMin=Math.round((e.clientY-colRect.top)/HOUR_H*60/SNAP)*SNAP;
-      let nd=endMin-ev.start;
-      nd=Math.max(SNAP,Math.min(DAY_MIN-ev.start,nd));
-      pendingDur=nd;
-      handle.parentElement.style.height=Math.max(18,(nd/60*HOUR_H)-2)+"px";
+      let mins=Math.round((e.clientY-colRect.top)/HOUR_H*60/SNAP)*SNAP;
+      if(part==="tail"){
+        // dragging the overnight continuation: end lands in the next day
+        let tail=Math.max(SNAP,Math.min(DAY_MIN,mins));
+        pendingDur=(DAY_MIN-ev.start)+tail;
+        handle.parentElement.style.height=Math.max(18,(tail/60*HOUR_H)-2)+"px";
+      }else{
+        let nd=mins-ev.start;
+        nd=Math.max(SNAP,Math.min(DAY_MIN-ev.start,nd));
+        pendingDur=nd;
+        handle.parentElement.style.height=Math.max(18,(nd/60*HOUR_H)-2)+"px";
+      }
     });
     handle.addEventListener("pointerup",function(e){
       if(!resizing)return;
@@ -514,7 +543,7 @@
       resizing=false;
       handle.parentElement.classList.remove("dragging");
       if(pendingDur && pendingDur!==ev.dur){
-        if(overlaps(ev.date,ev.start,pendingDur,ev.id)){ renderEvents(); } // would overlap: snap back
+        if(part!=="tail" && overlaps(ev.date,ev.start,pendingDur,ev.id)){ renderEvents(); } // would overlap: snap back
         else { resizeEvent(ev,pendingDur); }
       }
     });
@@ -539,8 +568,8 @@
     document.getElementById("fDate").value=ev?ev.date:ymd(presetDate||addDays(weekStart,new Date().getDay()));
     const startMin=ev?ev.start:(presetMin!=null?presetMin:9*60);
     const endMin=ev?(ev.start+ev.dur):Math.min(startMin+60,23*60+45);
-    document.getElementById("fStart").value=toHM(startMin);
-    document.getElementById("fEnd").value=toHM(endMin);
+    document.getElementById("fStart").value=toHM(startMin%DAY_MIN);
+    document.getElementById("fEnd").value=toHM(endMin%DAY_MIN);
     document.getElementById("fLoc").value=ev&&ev.location?ev.location:"";
     document.getElementById("fInvited").value=ev&&ev.invited?ev.invited:"";
     document.getElementById("fRepeat").value=ev&&ev.repeat?ev.repeat:"none";
@@ -563,8 +592,9 @@
     const invited=document.getElementById("fInvited").value.trim();
     const repeat=document.getElementById("fRepeat").value;
     if(!date){alert("Please choose a date.");return;}
-    if(end<=start){alert("End time must be after the start time.");return;}
-    const dur=end-start;
+    if(end===start){alert("Start and end time can't be the same.");return;}
+    let dur=end-start;
+    if(dur<0) dur+=DAY_MIN; // ends the next day (overnight event)
     if(overlaps(date,start,dur,editingId)){
       alert("That time overlaps another event. Please pick a free time slot.");return;
     }
