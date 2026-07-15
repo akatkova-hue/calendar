@@ -83,6 +83,11 @@
   .event .ev-resize-top::after{content:"";position:absolute;left:50%;top:3px;width:22px;height:3px;
     margin-left:-11px;border-radius:2px;background:rgba(255,255,255,.5);opacity:0;transition:opacity .12s;}
   .event:hover .ev-resize-top::after{opacity:1;}
+  .event.pending{opacity:.92;border:2px dashed rgba(255,255,255,.95);box-shadow:0 2px 8px rgba(0,0,0,.12);}
+  .event .ev-approve{position:absolute;bottom:5px;right:5px;font-family:var(--body);font-weight:800;font-size:11px;
+    background:rgba(255,255,255,.96);color:var(--text);border:none;border-radius:9px;padding:3px 9px;cursor:pointer;
+    box-shadow:0 2px 6px rgba(0,0,0,.25);z-index:5;}
+  .event .ev-approve:hover{background:#fff;transform:none;}
 
   /* Modal */
   .overlay{position:fixed;inset:0;background:rgba(43,39,64,.5);backdrop-filter:blur(3px);display:none;
@@ -133,6 +138,7 @@
     <span class="range" id="rangeLabel"></span>
     <span class="spacer"></span>
     <button id="shareBtn">Share link</button>
+    <button id="reqBtn">Event request</button>
     <button class="btn-primary" id="addBtn">+ New event</button>
   </header>
   <div class="hint">
@@ -226,6 +232,7 @@
               location text,
               invited text,
               repeat text,
+              status text default 'confirmed',
               created_at timestamptz default now()
             );
             create index if not exists events_schedule_idx on events (schedule_id);
@@ -262,6 +269,7 @@
   let events = [];
   let weekStart = startOfWeek(new Date());
   let editingId = null;
+  let requestMode = false;
   let pickedColor = COLORS[0];
 
   const calHead = document.getElementById("calHead");
@@ -304,8 +312,8 @@
   function genId(){return Date.now()+"-"+Math.random().toString(36).slice(2,7);}
 
   /* ---------- cloud row mapping ---------- */
-  function rowToEv(r){return {id:r.id,title:r.title,date:r.date,start:r.start_min,dur:r.dur_min,color:r.color,location:r.location||"",invited:r.invited||"",repeat:r.repeat||"none"};}
-  function evToRow(id,d){return {id:id,schedule_id:scheduleId,title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color,location:d.location||null,invited:d.invited||null,repeat:d.repeat||"none"};}
+  function rowToEv(r){return {id:r.id,title:r.title,date:r.date,start:r.start_min,dur:r.dur_min,color:r.color,location:r.location||"",invited:r.invited||"",repeat:r.repeat||"none",status:r.status||"confirmed"};}
+  function evToRow(id,d){return {id:id,schedule_id:scheduleId,title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color,location:d.location||null,invited:d.invited||null,repeat:d.repeat||"none",status:d.status||"confirmed"};}
 
   async function fetchAll(){
     const {data,error}=await db.from("events").select("*").eq("schedule_id",scheduleId);
@@ -323,7 +331,7 @@
   }
   function updateEvent(id,d){
     const ev=events.find(x=>x.id===id); if(ev) Object.assign(ev,d);
-    if(useCloud){ db.from("events").update({title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color,location:d.location||null,invited:d.invited||null,repeat:d.repeat||"none"}).eq("id",id).then(({error})=>{if(error)console.error(error);}); }
+    if(useCloud){ db.from("events").update({title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color,location:d.location||null,invited:d.invited||null,repeat:d.repeat||"none",status:d.status||"confirmed"}).eq("id",id).then(({error})=>{if(error)console.error(error);}); }
     else saveLocal();
   }
   function moveEvent(ev,newDate,newStart){
@@ -350,6 +358,13 @@
     else saveLocal();
     renderEvents();
   }
+  function approveEvent(ev){
+    if(overlaps(ev.date,ev.start,ev.dur,ev.id)){ alert("Can't approve — it overlaps a confirmed event. Move it first."); return; }
+    ev.status="confirmed";
+    if(useCloud){ db.from("events").update({status:"confirmed"}).eq("id",ev.id).then(({error})=>{if(error)console.error(error);}); }
+    else saveLocal();
+    renderEvents();
+  }
 
   /* ---------- recurrence + overlap ---------- */
   // Does event ev occur on the given YYYY-MM-DD date (accounting for repeat)?
@@ -368,7 +383,7 @@
   // Two events overlap on a day if both occur that day and their [start,end) ranges intersect.
   function overlaps(date,start,dur,ignoreId){
     const end=start+dur;
-    return events.some(ev=>ev.id!==ignoreId && occursOn(ev,date) && start<(ev.start+ev.dur) && end>ev.start);
+    return events.some(ev=>ev.id!==ignoreId && ev.status!=="pending" && occursOn(ev,date) && start<(ev.start+ev.dur) && end>ev.start);
   }
 
   /* ---------- build grid ---------- */
@@ -414,7 +429,7 @@
         const rect=col.getBoundingClientRect();
         let min=Math.round((e.clientY-rect.top)/HOUR_H*60/SNAP)*SNAP;
         min=Math.max(0,Math.min(DAY_MIN-SNAP,min));
-        openModal(null,addDays(weekStart,i),min);
+        requestMode=false;openModal(null,addDays(weekStart,i),min);
       });
       calBody.appendChild(col);
     }
@@ -460,7 +475,20 @@
     if(ev.location && heightMin>=60) html+='<div class="ev-meta">'+escapeHtml(ev.location)+'</div>';
     if(ev.invited && heightMin>=90) html+='<div class="ev-meta">with '+escapeHtml(ev.invited)+'</div>';
     el.innerHTML=html;
-    // resize handle lives on the block containing the true end (full or the overnight tail)
+    // pending event requests: dotted, with an Approve button, no drag/resize
+    if(ev.status==="pending"){
+      el.classList.add("pending");
+      el.style.cursor="pointer";
+      el.addEventListener("click",function(e){ if(e.target.closest(".ev-approve"))return; openModal(ev); });
+      if(part!=="tail"){
+        const ab=document.createElement("button");ab.className="ev-approve";ab.textContent="✓ Approve";
+        ab.addEventListener("pointerdown",function(e){e.stopPropagation();});
+        ab.addEventListener("click",function(e){e.stopPropagation();approveEvent(ev);});
+        el.appendChild(ab);
+      }
+      return el;
+    }
+    // confirmed events: resize handles + move-drag
     if(part==="full"||part==="tail"){
       const rz=document.createElement("div");rz.className="ev-resize";el.appendChild(rz);
       attachResize(rz,ev,part);
@@ -611,7 +639,8 @@
 
   function openModal(ev,presetDate,presetMin){
     editingId=ev?ev.id:null;
-    document.getElementById("modalTitle").textContent=ev?"Edit event":"New event";
+    if(ev) requestMode=false;
+    document.getElementById("modalTitle").textContent=ev?"Edit event":(requestMode?"New event request":"New event");
     document.getElementById("deleteBtn").style.display=ev?"inline-block":"none";
     document.getElementById("fTitle").value=ev?ev.title:"";
     document.getElementById("fDate").value=ev?ev.date:ymd(presetDate||addDays(weekStart,new Date().getDay()));
@@ -644,13 +673,16 @@
     if(end===start){alert("Start and end time can't be the same.");return;}
     let dur=end-start;
     if(dur<0) dur+=DAY_MIN; // ends the next day (overnight event)
-    if(overlaps(date,start,dur,editingId)){
+    let status;
+    if(editingId){ const ex=events.find(x=>x.id===editingId); status=ex&&ex.status?ex.status:"confirmed"; }
+    else { status=requestMode?"pending":"confirmed"; }
+    if(status!=="pending" && overlaps(date,start,dur,editingId)){
       alert("That time overlaps another event. Please pick a free time slot.");return;
     }
     if(editingId){
-      updateEvent(editingId,{title,date,start,dur,color:pickedColor,location,invited,repeat});
+      updateEvent(editingId,{title,date,start,dur,color:pickedColor,location,invited,repeat,status});
     }else{
-      addEvent({title,date,start,dur,color:pickedColor,location,invited,repeat});
+      addEvent({title,date,start,dur,color:pickedColor,location,invited,repeat,status});
     }
     closeModal();
     weekStart=startOfWeek(new Date(date+"T00:00:00"));
@@ -691,7 +723,8 @@
   document.getElementById("prevBtn").addEventListener("click",()=>{weekStart=addDays(weekStart,-7);buildHead();buildBody();});
   document.getElementById("nextBtn").addEventListener("click",()=>{weekStart=addDays(weekStart,7);buildHead();buildBody();});
   document.getElementById("todayBtn").addEventListener("click",()=>{weekStart=startOfWeek(new Date());buildHead();buildBody();});
-  document.getElementById("addBtn").addEventListener("click",()=>openModal(null));
+  document.getElementById("addBtn").addEventListener("click",()=>{requestMode=false;openModal(null);});
+  document.getElementById("reqBtn").addEventListener("click",()=>{requestMode=true;openModal(null);});
 
   /* ---------- init ---------- */
   if(!useCloud){events=loadLocal();}
