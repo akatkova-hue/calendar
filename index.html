@@ -380,10 +380,28 @@
     }
     return false;
   }
-  // Two events overlap on a day if both occur that day and their [start,end) ranges intersect.
+  function nextDay(dateStr){return ymd(addDays(new Date(dateStr+"T00:00:00"),1));}
+  function prevDay(dateStr){return ymd(addDays(new Date(dateStr+"T00:00:00"),-1));}
+  // The minute-ranges an event occupies ON a given calendar day, including the
+  // portion that spilled over from an occurrence the previous day (overnight events).
+  function intervalsOnDay(ev,dayStr){
+    const out=[]; const endAbs=ev.start+ev.dur;
+    if(occursOn(ev,dayStr)) out.push([ev.start, Math.min(DAY_MIN,endAbs)]);           // same-day part
+    if(endAbs>DAY_MIN && occursOn(ev,prevDay(dayStr))) out.push([0, endAbs-DAY_MIN]); // spilled from yesterday
+    return out;
+  }
+  function rangesIntersect(a,b){ return a[0]<b[1] && b[0]<a[1]; }
+  // Would an event on `date` at [start, start+dur) collide with any confirmed event?
+  // Handles overnight events on either side (candidate and existing) and recurrence.
+  // Pending requests don't occupy time (they only conflict once approved).
   function overlaps(date,start,dur,ignoreId){
-    const end=start+dur;
-    return events.some(ev=>ev.id!==ignoreId && ev.status!=="pending" && occursOn(ev,date) && start<(ev.start+ev.dur) && end>ev.start);
+    const endAbs=start+dur;
+    const cand=[[date,[start,Math.min(DAY_MIN,endAbs)]]];
+    if(endAbs>DAY_MIN) cand.push([nextDay(date),[0,endAbs-DAY_MIN]]); // candidate's after-midnight part
+    return events.some(ev=>{
+      if(ev.id===ignoreId || ev.status==="pending") return false;
+      return cand.some(c=>intervalsOnDay(ev,c[0]).some(iv=>rangesIntersect(iv,c[1])));
+    });
   }
 
   /* ---------- build grid ---------- */
