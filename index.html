@@ -69,6 +69,7 @@
   .event.dragging{opacity:.9;cursor:grabbing;z-index:20;box-shadow:0 10px 24px rgba(0,0,0,.3);transform:scale(1.02);}
   .event .ev-title{font-weight:800;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;}
   .event .ev-time{opacity:.92;font-size:11px;font-weight:700;}
+  .event .ev-meta{opacity:.9;font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 
   /* Modal */
   .overlay{position:fixed;inset:0;background:rgba(43,39,64,.5);backdrop-filter:blur(3px);display:none;
@@ -79,6 +80,7 @@
   .modal h2{font-family:var(--round);margin:0 0 16px;font-size:20px;font-weight:800;color:var(--accent);}
   .field{margin-bottom:14px;}
   .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:800;letter-spacing:.02em;}
+  .field label .opt{font-weight:600;opacity:.7;}
   .field input,.field select{width:100%;padding:10px 12px;border:2px solid var(--line-strong);
     border-radius:14px;font-family:var(--body);font-weight:600;background:var(--panel);color:var(--text);
     transition:border-color .15s;}
@@ -150,18 +152,17 @@
           <input type="time" id="fStart" step="900">
         </div>
         <div class="field">
-          <label>Duration</label>
-          <select id="fDur">
-            <option value="15">15 min</option>
-            <option value="30">30 min</option>
-            <option value="45">45 min</option>
-            <option value="60" selected>1 hour</option>
-            <option value="90">1.5 hours</option>
-            <option value="120">2 hours</option>
-            <option value="180">3 hours</option>
-            <option value="240">4 hours</option>
-          </select>
+          <label>End time</label>
+          <input type="time" id="fEnd" step="900">
         </div>
+      </div>
+      <div class="field">
+        <label>Location <span class="opt">(optional)</span></label>
+        <input type="text" id="fLoc" placeholder="e.g. Room 4, or a meeting link" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>People invited <span class="opt">(optional)</span></label>
+        <input type="text" id="fInvited" placeholder="names or emails, comma-separated" autocomplete="off">
       </div>
       <div class="field">
         <label>Color</label>
@@ -199,6 +200,8 @@
               start_min int,
               dur_min int,
               color text,
+              location text,
+              invited text,
               created_at timestamptz default now()
             );
             create index if not exists events_schedule_idx on events (schedule_id);
@@ -277,8 +280,8 @@
   function genId(){return Date.now()+"-"+Math.random().toString(36).slice(2,7);}
 
   /* ---------- cloud row mapping ---------- */
-  function rowToEv(r){return {id:r.id,title:r.title,date:r.date,start:r.start_min,dur:r.dur_min,color:r.color};}
-  function evToRow(id,d){return {id:id,schedule_id:scheduleId,title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color};}
+  function rowToEv(r){return {id:r.id,title:r.title,date:r.date,start:r.start_min,dur:r.dur_min,color:r.color,location:r.location||"",invited:r.invited||""};}
+  function evToRow(id,d){return {id:id,schedule_id:scheduleId,title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color,location:d.location||null,invited:d.invited||null};}
 
   async function fetchAll(){
     const {data,error}=await db.from("events").select("*").eq("schedule_id",scheduleId);
@@ -296,7 +299,7 @@
   }
   function updateEvent(id,d){
     const ev=events.find(x=>x.id===id); if(ev) Object.assign(ev,d);
-    if(useCloud){ db.from("events").update({title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color}).eq("id",id).then(({error})=>{if(error)console.error(error);}); }
+    if(useCloud){ db.from("events").update({title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color,location:d.location||null,invited:d.invited||null}).eq("id",id).then(({error})=>{if(error)console.error(error);}); }
     else saveLocal();
   }
   function moveEvent(ev,newDate,newStart){
@@ -390,8 +393,11 @@
     el.style.top=(ev.start/60*HOUR_H)+"px";
     el.style.height=Math.max(18,(ev.dur/60*HOUR_H)-2)+"px";
     el.dataset.id=ev.id;
-    el.innerHTML='<div class="ev-title">'+escapeHtml(ev.title||"Untitled")+'</div>'+
-      (ev.dur>=30?'<div class="ev-time">'+fmtTime(ev.start)+' – '+fmtTime(ev.start+ev.dur)+'</div>':'');
+    let html='<div class="ev-title">'+escapeHtml(ev.title||"Untitled")+'</div>';
+    if(ev.dur>=30) html+='<div class="ev-time">'+fmtTime(ev.start)+' – '+fmtTime(ev.start+ev.dur)+'</div>';
+    if(ev.location && ev.dur>=60) html+='<div class="ev-meta">'+escapeHtml(ev.location)+'</div>';
+    if(ev.invited && ev.dur>=90) html+='<div class="ev-meta">with '+escapeHtml(ev.invited)+'</div>';
+    el.innerHTML=html;
     attachDrag(el,ev);
     return el;
   }
@@ -460,8 +466,11 @@
     document.getElementById("fTitle").value=ev?ev.title:"";
     document.getElementById("fDate").value=ev?ev.date:ymd(presetDate||addDays(weekStart,new Date().getDay()));
     const startMin=ev?ev.start:(presetMin!=null?presetMin:9*60);
-    document.getElementById("fStart").value=String(Math.floor(startMin/60)).padStart(2,"0")+":"+String(startMin%60).padStart(2,"0");
-    document.getElementById("fDur").value=ev?String(ev.dur):"60";
+    const endMin=ev?(ev.start+ev.dur):Math.min(startMin+60,23*60+45);
+    document.getElementById("fStart").value=toHM(startMin);
+    document.getElementById("fEnd").value=toHM(endMin);
+    document.getElementById("fLoc").value=ev&&ev.location?ev.location:"";
+    document.getElementById("fInvited").value=ev&&ev.invited?ev.invited:"";
     pickedColor=ev?ev.color:COLORS[Math.floor(Math.random()*COLORS.length)];
     syncSwatches();
     overlay.classList.add("open");
@@ -470,20 +479,25 @@
   function closeModal(){overlay.classList.remove("open");editingId=null;}
 
   function parseTime(v){const [h,m]=v.split(":").map(Number);return h*60+(m||0);}
+  function toHM(min){return String(Math.floor(min/60)).padStart(2,"0")+":"+String(min%60).padStart(2,"0");}
 
   document.getElementById("saveBtn").addEventListener("click",function(){
     const title=document.getElementById("fTitle").value.trim();
     const date=document.getElementById("fDate").value;
     const start=parseTime(document.getElementById("fStart").value||"09:00");
-    const dur=parseInt(document.getElementById("fDur").value,10);
+    const end=parseTime(document.getElementById("fEnd").value||"10:00");
+    const location=document.getElementById("fLoc").value.trim();
+    const invited=document.getElementById("fInvited").value.trim();
     if(!date){alert("Please choose a date.");return;}
+    if(end<=start){alert("End time must be after the start time.");return;}
+    const dur=end-start;
     if(overlaps(date,start,dur,editingId)){
       alert("That time overlaps another event. Please pick a free time slot.");return;
     }
     if(editingId){
-      updateEvent(editingId,{title,date,start,dur,color:pickedColor});
+      updateEvent(editingId,{title,date,start,dur,color:pickedColor,location,invited});
     }else{
-      addEvent({title,date,start,dur,color:pickedColor});
+      addEvent({title,date,start,dur,color:pickedColor,location,invited});
     }
     closeModal();
     weekStart=startOfWeek(new Date(date+"T00:00:00"));
