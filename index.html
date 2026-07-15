@@ -520,6 +520,12 @@
     else{s.classList.remove("on");txt.textContent="Solo mode — add Supabase keys to share & collaborate";}
   }
 
+  /* ---------- nav & add ---------- */
+  document.getElementById("prevBtn").addEventListener("click",()=>{weekStart=addDays(weekStart,-7);buildHead();buildBody();});
+  document.getElementById("nextBtn").addEventListener("click",()=>{weekStart=addDays(weekStart,7);buildHead();buildBody();});
+  document.getElementById("todayBtn").addEventListener("click",()=>{weekStart=startOfWeek(new Date());buildHead();buildBody();});
+  document.getElementById("addBtn").addEventListener("click",()=>openModal(null));
+
   /* ---------- init ---------- */
   if(!useCloud){events=loadLocal();}
   buildHead();buildBody();
