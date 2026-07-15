@@ -475,20 +475,8 @@
     if(ev.location && heightMin>=60) html+='<div class="ev-meta">'+escapeHtml(ev.location)+'</div>';
     if(ev.invited && heightMin>=90) html+='<div class="ev-meta">with '+escapeHtml(ev.invited)+'</div>';
     el.innerHTML=html;
-    // pending event requests: dotted, with an Approve button, no drag/resize
-    if(ev.status==="pending"){
-      el.classList.add("pending");
-      el.style.cursor="pointer";
-      el.addEventListener("click",function(e){ if(e.target.closest(".ev-approve"))return; openModal(ev); });
-      if(part!=="tail"){
-        const ab=document.createElement("button");ab.className="ev-approve";ab.textContent="✓ Approve";
-        ab.addEventListener("pointerdown",function(e){e.stopPropagation();});
-        ab.addEventListener("click",function(e){e.stopPropagation();approveEvent(ev);});
-        el.appendChild(ab);
-      }
-      return el;
-    }
-    // confirmed events: resize handles + move-drag
+    if(ev.status==="pending") el.classList.add("pending");
+    // resize handles: bottom on the block with the true end, top on the block with the start
     if(part==="full"||part==="tail"){
       const rz=document.createElement("div");rz.className="ev-resize";el.appendChild(rz);
       attachResize(rz,ev,part);
@@ -501,7 +489,14 @@
       el.style.cursor="pointer";
       el.addEventListener("click",function(e){ if(e.target.classList.contains("ev-resize"))return; openModal(ev); });
     }else{
-      attachDrag(el,ev); // head/full blocks can be moved
+      attachDrag(el,ev); // drag body to move; a plain click opens edit
+    }
+    // pending requests also get an Approve button (moving/resizing works like a real event)
+    if(ev.status==="pending" && part!=="tail"){
+      const ab=document.createElement("button");ab.className="ev-approve";ab.textContent="✓ Approve";
+      ab.addEventListener("pointerdown",function(e){e.stopPropagation();});
+      ab.addEventListener("click",function(e){e.stopPropagation();approveEvent(ev);});
+      el.appendChild(ab);
     }
     return el;
   }
@@ -541,7 +536,7 @@
       dragging=false;el.classList.remove("dragging");
       if(moved&&el._pendingDay!=null){
         const newDate=ymd(addDays(weekStart,el._pendingDay));
-        if(overlaps(newDate,el._pendingMin,ev.dur,ev.id)){
+        if(ev.status!=="pending" && overlaps(newDate,el._pendingMin,ev.dur,ev.id)){
           renderEvents(); // would overlap another event: snap back
         }else{
           moveEvent(ev,newDate,el._pendingMin);
@@ -586,7 +581,7 @@
       resizing=false;
       handle.parentElement.classList.remove("dragging");
       if(pendingDur && pendingDur!==ev.dur){
-        if(part!=="tail" && overlaps(ev.date,ev.start,pendingDur,ev.id)){ renderEvents(); } // would overlap: snap back
+        if(ev.status!=="pending" && part!=="tail" && overlaps(ev.date,ev.start,pendingDur,ev.id)){ renderEvents(); } // would overlap: snap back
         else { resizeEvent(ev,pendingDur); }
       }
     });
@@ -620,7 +615,7 @@
       resizing=false;
       handle.parentElement.classList.remove("dragging");
       if(pStart!==ev.start || pDur!==ev.dur){
-        if(overlaps(ev.date,pStart,pDur,ev.id)){ renderEvents(); } // would overlap: snap back
+        if(ev.status!=="pending" && overlaps(ev.date,pStart,pDur,ev.id)){ renderEvents(); } // would overlap: snap back
         else { reshapeEvent(ev,pStart,pDur); }
       }
     });
