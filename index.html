@@ -96,6 +96,7 @@
   .modal{background:var(--panel);border-radius:24px;padding:24px;width:350px;max-width:92vw;
     box-shadow:0 24px 60px rgba(43,39,64,.35);}
   .modal h2{font-family:var(--round);margin:0 0 16px;font-size:20px;font-weight:800;color:var(--accent);}
+  .creator-line{font-size:12px;color:var(--muted);font-weight:700;margin:-8px 0 14px;}
   .field{margin-bottom:14px;}
   .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:800;letter-spacing:.02em;}
   .field label .opt{font-weight:600;opacity:.7;}
@@ -137,6 +138,7 @@
     <button id="todayBtn">Today</button>
     <span class="range" id="rangeLabel"></span>
     <span class="spacer"></span>
+    <button id="nameBtn">Set your name</button>
     <button id="shareBtn">Share link</button>
     <button id="reqBtn">Event request</button>
     <button class="btn-primary" id="addBtn">+ New event</button>
@@ -157,6 +159,7 @@
   <div class="overlay" id="overlay">
     <div class="modal">
       <h2 id="modalTitle">New event</h2>
+      <div id="creatorLine" class="creator-line" style="display:none"></div>
       <div class="field">
         <label>Title</label>
         <input type="text" id="fTitle" placeholder="Event name" autocomplete="off">
@@ -233,6 +236,7 @@
               invited text,
               repeat text,
               status text default 'confirmed',
+              creator text,
               created_at timestamptz default now()
             );
             create index if not exists events_schedule_idx on events (schedule_id);
@@ -271,6 +275,7 @@
   let editingId = null;
   let requestMode = false;
   let pickedColor = COLORS[0];
+  let userName = ""; try{ userName = localStorage.getItem("planner-user-name")||""; }catch(e){}
 
   const calHead = document.getElementById("calHead");
   const calBody = document.getElementById("calBody");
@@ -312,8 +317,8 @@
   function genId(){return Date.now()+"-"+Math.random().toString(36).slice(2,7);}
 
   /* ---------- cloud row mapping ---------- */
-  function rowToEv(r){return {id:r.id,title:r.title,date:r.date,start:r.start_min,dur:r.dur_min,color:r.color,location:r.location||"",invited:r.invited||"",repeat:r.repeat||"none",status:r.status||"confirmed"};}
-  function evToRow(id,d){return {id:id,schedule_id:scheduleId,title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color,location:d.location||null,invited:d.invited||null,repeat:d.repeat||"none",status:d.status||"confirmed"};}
+  function rowToEv(r){return {id:r.id,title:r.title,date:r.date,start:r.start_min,dur:r.dur_min,color:r.color,location:r.location||"",invited:r.invited||"",repeat:r.repeat||"none",status:r.status||"confirmed",creator:r.creator||""};}
+  function evToRow(id,d){return {id:id,schedule_id:scheduleId,title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color,location:d.location||null,invited:d.invited||null,repeat:d.repeat||"none",status:d.status||"confirmed",creator:d.creator||null};}
 
   async function fetchAll(){
     const {data,error}=await db.from("events").select("*").eq("schedule_id",scheduleId);
@@ -331,7 +336,7 @@
   }
   function updateEvent(id,d){
     const ev=events.find(x=>x.id===id); if(ev) Object.assign(ev,d);
-    if(useCloud){ db.from("events").update({title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color,location:d.location||null,invited:d.invited||null,repeat:d.repeat||"none",status:d.status||"confirmed"}).eq("id",id).then(({error})=>{if(error)console.error(error);}); }
+    if(useCloud){ db.from("events").update({title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color,location:d.location||null,invited:d.invited||null,repeat:d.repeat||"none",status:d.status||"confirmed",creator:d.creator||null}).eq("id",id).then(({error})=>{if(error)console.error(error);}); }
     else saveLocal();
   }
   function moveEvent(ev,newDate,newStart){
@@ -492,6 +497,7 @@
     if(heightMin>=30) html+='<div class="ev-time">'+fmtTime(ev.start)+' – '+fmtTime(endAbs%DAY_MIN)+'</div>';
     if(ev.location && heightMin>=60) html+='<div class="ev-meta">'+escapeHtml(ev.location)+'</div>';
     if(ev.invited && heightMin>=90) html+='<div class="ev-meta">with '+escapeHtml(ev.invited)+'</div>';
+    if(ev.creator && heightMin>=75) html+='<div class="ev-meta">by '+escapeHtml(ev.creator)+'</div>';
     el.innerHTML=html;
     if(ev.status==="pending") el.classList.add("pending");
     // resize handles: bottom on the block with the true end, top on the block with the start
@@ -654,6 +660,9 @@
     editingId=ev?ev.id:null;
     if(ev) requestMode=false;
     document.getElementById("modalTitle").textContent=ev?"Edit event":(requestMode?"New event request":"New event");
+    const cl=document.getElementById("creatorLine");
+    if(ev && ev.creator){ cl.style.display="block"; cl.textContent="Created by "+ev.creator; }
+    else { cl.style.display="none"; cl.textContent=""; }
     document.getElementById("deleteBtn").style.display=ev?"inline-block":"none";
     document.getElementById("fTitle").value=ev?ev.title:"";
     document.getElementById("fDate").value=ev?ev.date:ymd(presetDate||addDays(weekStart,new Date().getDay()));
@@ -686,16 +695,16 @@
     if(end===start){alert("Start and end time can't be the same.");return;}
     let dur=end-start;
     if(dur<0) dur+=DAY_MIN; // ends the next day (overnight event)
-    let status;
-    if(editingId){ const ex=events.find(x=>x.id===editingId); status=ex&&ex.status?ex.status:"confirmed"; }
-    else { status=requestMode?"pending":"confirmed"; }
+    let status,creator;
+    if(editingId){ const ex=events.find(x=>x.id===editingId)||{}; status=ex.status||"confirmed"; creator=ex.creator||""; }
+    else { status=requestMode?"pending":"confirmed"; if(!userName) promptName(); creator=userName; }
     if(status!=="pending" && overlaps(date,start,dur,editingId)){
       alert("That time overlaps another event. Please pick a free time slot.");return;
     }
     if(editingId){
-      updateEvent(editingId,{title,date,start,dur,color:pickedColor,location,invited,repeat,status});
+      updateEvent(editingId,{title,date,start,dur,color:pickedColor,location,invited,repeat,status,creator});
     }else{
-      addEvent({title,date,start,dur,color:pickedColor,location,invited,repeat,status});
+      addEvent({title,date,start,dur,color:pickedColor,location,invited,repeat,status,creator});
     }
     closeModal();
     weekStart=startOfWeek(new Date(date+"T00:00:00"));
@@ -733,6 +742,14 @@
     }else{window.prompt("Copy this link:",url);}
   });
 
+  /* ---------- name / who created events ---------- */
+  function updateNameBtn(){ document.getElementById("nameBtn").textContent = userName ? ("You: "+userName) : "Set your name"; }
+  function promptName(){
+    const n=window.prompt("Your name (shown on events you create):", userName||"");
+    if(n!=null){ userName=String(n).trim(); try{localStorage.setItem("planner-user-name",userName);}catch(e){} updateNameBtn(); }
+  }
+  document.getElementById("nameBtn").addEventListener("click",promptName);
+
   /* ---------- status ---------- */
   function updateStatus(){
     const s=document.getElementById("status");
@@ -752,6 +769,8 @@
   if(!useCloud){events=loadLocal();}
   buildHead();buildBody();
   updateStatus();
+  updateNameBtn();
+  if(!userName) promptName();
   if(useCloud){
     fetchAll();
     db.channel("schedule-"+scheduleId)
