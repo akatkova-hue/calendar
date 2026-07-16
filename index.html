@@ -69,7 +69,9 @@
   .event.dragging{opacity:.9;cursor:grabbing;z-index:20;box-shadow:0 10px 24px rgba(0,0,0,.3);transform:scale(1.02);}
   .event.cont-head{border-bottom-left-radius:5px;border-bottom-right-radius:5px;}
   .event.cont-tail{border-top-left-radius:5px;border-top-right-radius:5px;}
-  .event .ev-title{font-weight:800;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;}
+  .event .ev-titlerow{display:flex;align-items:baseline;gap:6px;}
+  .event .ev-title{flex:1 1 auto;min-width:0;font-weight:800;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;}
+  .event .ev-by{flex:0 0 auto;font-size:11px;font-weight:700;opacity:.9;white-space:nowrap;}
   .event .ev-rep{font-size:11px;opacity:.85;}
   .event .ev-time{opacity:.92;font-size:11px;font-weight:700;}
   .event .ev-meta{opacity:.9;font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -493,11 +495,11 @@
     const endAbs=ev.start+ev.dur;
     const rep=(ev.repeat&&ev.repeat!=="none")?' <span class="ev-rep" title="Repeats '+ev.repeat+'">↻</span>':'';
     const cont=part==="tail"?' <span class="ev-rep">(cont.)</span>':'';
-    let html='<div class="ev-title">'+escapeHtml(ev.title||"Untitled")+rep+cont+'</div>';
+    const by = ev.creator ? '<span class="ev-by">by: '+escapeHtml(ev.creator)+'</span>' : '';
+    let html='<div class="ev-titlerow"><span class="ev-title">'+escapeHtml(ev.title||"Untitled")+rep+cont+'</span>'+by+'</div>';
     if(heightMin>=30) html+='<div class="ev-time">'+fmtTime(ev.start)+' – '+fmtTime(endAbs%DAY_MIN)+'</div>';
     if(ev.location && heightMin>=60) html+='<div class="ev-meta">'+escapeHtml(ev.location)+'</div>';
     if(ev.invited && heightMin>=90) html+='<div class="ev-meta">with '+escapeHtml(ev.invited)+'</div>';
-    if(ev.creator && heightMin>=75) html+='<div class="ev-meta">by '+escapeHtml(ev.creator)+'</div>';
     el.innerHTML=html;
     if(ev.status==="pending") el.classList.add("pending");
     // resize handles: bottom on the block with the true end, top on the block with the start
