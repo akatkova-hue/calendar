@@ -74,7 +74,7 @@
   .event .ev-by{flex:0 0 auto;font-size:11px;font-weight:700;opacity:.9;white-space:nowrap;}
   .event .ev-rep{font-size:11px;opacity:.85;}
   .event .ev-time{opacity:.92;font-size:11px;font-weight:700;}
-  .event .ev-meta{opacity:.9;font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .event .ev-meta{opacity:.9;font-size:11px;font-weight:700;overflow-wrap:anywhere;}
   .event .ev-resize{position:absolute;left:0;right:0;bottom:0;height:11px;cursor:ns-resize;border-radius:0 0 14px 14px;}
   .event .ev-resize:hover{background:rgba(255,255,255,.3);}
   .event .ev-resize::after{content:"";position:absolute;left:50%;bottom:3px;width:22px;height:3px;
@@ -185,6 +185,10 @@
         <input type="text" id="fLoc" placeholder="e.g. Room 4, or a meeting link" autocomplete="off">
       </div>
       <div class="field">
+        <label>Description <span class="opt">(optional)</span></label>
+        <input type="text" id="fDesc" placeholder="Notes, agenda, details" autocomplete="off">
+      </div>
+      <div class="field">
         <label>People invited <span class="opt">(optional)</span></label>
         <input type="text" id="fInvited" placeholder="names or emails, comma-separated" autocomplete="off">
       </div>
@@ -235,6 +239,7 @@
               dur_min int,
               color text,
               location text,
+              description text,
               invited text,
               repeat text,
               status text default 'confirmed',
@@ -320,8 +325,8 @@
   function genId(){return Date.now()+"-"+Math.random().toString(36).slice(2,7);}
 
   /* ---------- cloud row mapping ---------- */
-  function rowToEv(r){return {id:r.id,title:r.title,date:r.date,start:r.start_min,dur:r.dur_min,color:r.color,location:r.location||"",invited:r.invited||"",repeat:r.repeat||"none",status:r.status||"confirmed",creator:r.creator||""};}
-  function evToRow(id,d){return {id:id,schedule_id:scheduleId,title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color,location:d.location||null,invited:d.invited||null,repeat:d.repeat||"none",status:d.status||"confirmed",creator:d.creator||null};}
+  function rowToEv(r){return {id:r.id,title:r.title,date:r.date,start:r.start_min,dur:r.dur_min,color:r.color,location:r.location||"",description:r.description||"",invited:r.invited||"",repeat:r.repeat||"none",status:r.status||"confirmed",creator:r.creator||""};}
+  function evToRow(id,d){return {id:id,schedule_id:scheduleId,title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color,location:d.location||null,description:d.description||null,invited:d.invited||null,repeat:d.repeat||"none",status:d.status||"confirmed",creator:d.creator||null};}
 
   async function fetchAll(){
     const {data,error}=await db.from("events").select("*").eq("schedule_id",scheduleId);
@@ -339,7 +344,7 @@
   }
   function updateEvent(id,d){
     const ev=events.find(x=>x.id===id); if(ev) Object.assign(ev,d);
-    if(useCloud){ db.from("events").update({title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color,location:d.location||null,invited:d.invited||null,repeat:d.repeat||"none",status:d.status||"confirmed",creator:d.creator||null}).eq("id",id).then(({error})=>{if(error)console.error(error);}); }
+    if(useCloud){ db.from("events").update({title:d.title,date:d.date,start_min:d.start,dur_min:d.dur,color:d.color,location:d.location||null,description:d.description||null,invited:d.invited||null,repeat:d.repeat||"none",status:d.status||"confirmed",creator:d.creator||null}).eq("id",id).then(({error})=>{if(error)console.error(error);}); }
     else saveLocal();
   }
   function moveEvent(ev,newDate,newStart){
@@ -499,8 +504,9 @@
     const by = ev.creator ? '<span class="ev-by">by: '+escapeHtml(ev.creator)+'</span>' : '';
     let html='<div class="ev-titlerow"><span class="ev-title">'+escapeHtml(ev.title||"Untitled")+rep+cont+'</span>'+by+'</div>';
     if(heightMin>=30) html+='<div class="ev-time">'+fmtTime(ev.start)+' – '+fmtTime(endAbs%DAY_MIN)+'</div>';
-    if(ev.location && heightMin>=60) html+='<div class="ev-meta">'+escapeHtml(ev.location)+'</div>';
-    if(ev.invited && heightMin>=90) html+='<div class="ev-meta">with '+escapeHtml(ev.invited)+'</div>';
+    if(ev.location && heightMin>=55) html+='<div class="ev-meta">at: '+escapeHtml(ev.location)+'</div>';
+    if(ev.description && heightMin>=70) html+='<div class="ev-meta">'+escapeHtml(ev.description)+'</div>';
+    if(ev.invited && heightMin>=85) html+='<div class="ev-meta">with '+escapeHtml(ev.invited)+'</div>';
     el.innerHTML=html;
     if(ev.status==="pending") el.classList.add("pending");
     const owner=isOwner();
@@ -679,6 +685,7 @@
     document.getElementById("fStart").value=toHM(startMin%DAY_MIN);
     document.getElementById("fEnd").value=toHM(endMin%DAY_MIN);
     document.getElementById("fLoc").value=ev&&ev.location?ev.location:"";
+    document.getElementById("fDesc").value=ev&&ev.description?ev.description:"";
     document.getElementById("fInvited").value=ev&&ev.invited?ev.invited:"";
     document.getElementById("fRepeat").value=ev&&ev.repeat?ev.repeat:"none";
     pickedColor=ev?ev.color:COLORS[Math.floor(Math.random()*COLORS.length)];
@@ -697,6 +704,7 @@
     const start=parseTime(document.getElementById("fStart").value||"09:00");
     const end=parseTime(document.getElementById("fEnd").value||"10:00");
     const location=document.getElementById("fLoc").value.trim();
+    const description=document.getElementById("fDesc").value.trim();
     const invited=document.getElementById("fInvited").value.trim();
     const repeat=document.getElementById("fRepeat").value;
     if(!date){alert("Please choose a date.");return;}
@@ -710,9 +718,9 @@
       alert("That time overlaps another event. Please pick a free time slot.");return;
     }
     if(editingId){
-      updateEvent(editingId,{title,date,start,dur,color:pickedColor,location,invited,repeat,status,creator});
+      updateEvent(editingId,{title,date,start,dur,color:pickedColor,location,description,invited,repeat,status,creator});
     }else{
-      addEvent({title,date,start,dur,color:pickedColor,location,invited,repeat,status,creator});
+      addEvent({title,date,start,dur,color:pickedColor,location,description,invited,repeat,status,creator});
     }
     closeModal();
     weekStart=startOfWeek(new Date(date+"T00:00:00"));
