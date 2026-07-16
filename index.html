@@ -282,6 +282,7 @@
   let weekStart = startOfWeek(new Date());
   let editingId = null;
   let requestMode = false;
+  let viewOnly = false;
   let pickedColor = COLORS[0];
   let userName = ""; try{ userName = localStorage.getItem("planner-user-name")||""; }catch(e){}
 
@@ -527,7 +528,8 @@
         attachDrag(el,ev); // drag body to move; a plain click opens edit
       }
     }else{
-      el.style.cursor="default"; // view-only for requesters
+      el.style.cursor="pointer"; // requesters can open a read-only view to see details
+      el.addEventListener("click",function(){ openModal(ev,null,null,true); });
     }
     // Approve button: only the owner can approve a pending request
     if(ev.status==="pending" && part!=="tail" && owner){
@@ -670,14 +672,15 @@
   function syncSwatches(){colorPicker.querySelectorAll(".swatch").forEach(s=>
     s.classList.toggle("sel",s.dataset.color===pickedColor));}
 
-  function openModal(ev,presetDate,presetMin){
-    editingId=ev?ev.id:null;
+  function openModal(ev,presetDate,presetMin,readOnly){
+    const ro=!!readOnly;
+    viewOnly=ro;
+    editingId=(ev&&!ro)?ev.id:null;
     if(ev) requestMode=false;
-    document.getElementById("modalTitle").textContent=ev?"Edit event":(requestMode?"New event request":"New event");
+    document.getElementById("modalTitle").textContent=ro?"Event details":(ev?"Edit event":(requestMode?"New event request":"New event"));
     const cl=document.getElementById("creatorLine");
     if(ev && ev.creator){ cl.style.display="block"; cl.textContent="Created by "+ev.creator; }
     else { cl.style.display="none"; cl.textContent=""; }
-    document.getElementById("deleteBtn").style.display=ev?"inline-block":"none";
     document.getElementById("fTitle").value=ev?ev.title:"";
     document.getElementById("fDate").value=ev?ev.date:ymd(presetDate||addDays(weekStart,new Date().getDay()));
     const startMin=ev?ev.start:(presetMin!=null?presetMin:9*60);
@@ -690,15 +693,22 @@
     document.getElementById("fRepeat").value=ev&&ev.repeat?ev.repeat:"none";
     pickedColor=ev?ev.color:COLORS[Math.floor(Math.random()*COLORS.length)];
     syncSwatches();
+    // read-only mode: lock fields, hide Save/Delete, show a Close button
+    ["fTitle","fDate","fStart","fEnd","fLoc","fDesc","fInvited","fRepeat"].forEach(function(id){document.getElementById(id).disabled=ro;});
+    colorPicker.style.pointerEvents=ro?"none":"";
+    document.getElementById("saveBtn").style.display=ro?"none":"";
+    document.getElementById("deleteBtn").style.display=(ev&&!ro)?"inline-block":"none";
+    document.getElementById("cancelBtn").textContent=ro?"Close":"Cancel";
     overlay.classList.add("open");
-    setTimeout(()=>document.getElementById("fTitle").focus(),50);
+    if(!ro) setTimeout(()=>document.getElementById("fTitle").focus(),50);
   }
-  function closeModal(){overlay.classList.remove("open");editingId=null;}
+  function closeModal(){overlay.classList.remove("open");editingId=null;viewOnly=false;}
 
   function parseTime(v){const [h,m]=v.split(":").map(Number);return h*60+(m||0);}
   function toHM(min){return String(Math.floor(min/60)).padStart(2,"0")+":"+String(min%60).padStart(2,"0");}
 
   document.getElementById("saveBtn").addEventListener("click",function(){
+    if(viewOnly)return;
     const title=document.getElementById("fTitle").value.trim();
     const date=document.getElementById("fDate").value;
     const start=parseTime(document.getElementById("fStart").value||"09:00");
@@ -734,10 +744,11 @@
   overlay.addEventListener("click",e=>{if(e.target===overlay)closeModal();});
   document.addEventListener("keydown",e=>{
     if(!overlay.classList.contains("open"))return;
+    if(e.key==="Escape"){closeModal();return;}
+    if(viewOnly)return;
     const ae=document.activeElement;
     const typing=ae&&(ae.tagName==="INPUT"||ae.tagName==="SELECT"||ae.tagName==="TEXTAREA");
-    if(e.key==="Escape"){closeModal();}
-    else if(e.key==="Enter"){e.preventDefault();document.getElementById("saveBtn").click();}
+    if(e.key==="Enter"){e.preventDefault();document.getElementById("saveBtn").click();}
     else if((e.key==="Delete"||e.key==="Backspace") && editingId && !typing){
       e.preventDefault();document.getElementById("deleteBtn").click();
     }
