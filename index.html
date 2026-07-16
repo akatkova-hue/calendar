@@ -271,6 +271,7 @@
   const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
   const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   const STORE_KEY = "weekly-planner-events-v1";
+  const OWNER_NAME = "Anna"; // this name has full access; everyone else can only send event requests
 
   let events = [];
   let weekStart = startOfWeek(new Date());
@@ -454,7 +455,7 @@
         const rect=col.getBoundingClientRect();
         let min=Math.round((e.clientY-rect.top)/HOUR_H*60/SNAP)*SNAP;
         min=Math.max(0,Math.min(DAY_MIN-SNAP,min));
-        requestMode=false;openModal(null,addDays(weekStart,i),min);
+        requestMode=!isOwner();openModal(null,addDays(weekStart,i),min);
       });
       calBody.appendChild(col);
     }
@@ -502,23 +503,28 @@
     if(ev.invited && heightMin>=90) html+='<div class="ev-meta">with '+escapeHtml(ev.invited)+'</div>';
     el.innerHTML=html;
     if(ev.status==="pending") el.classList.add("pending");
-    // resize handles: bottom on the block with the true end, top on the block with the start
-    if(part==="full"||part==="tail"){
-      const rz=document.createElement("div");rz.className="ev-resize";el.appendChild(rz);
-      attachResize(rz,ev,part);
-    }
-    if(part==="full"||part==="head"){
-      const rzt=document.createElement("div");rzt.className="ev-resize-top";el.appendChild(rzt);
-      attachResizeTop(rzt,ev,part);
-    }
-    if(part==="tail"){
-      el.style.cursor="pointer";
-      el.addEventListener("click",function(e){ if(e.target.classList.contains("ev-resize"))return; openModal(ev); });
+    const owner=isOwner();
+    const interactive=(ev.status==="pending")||owner; // requesters can't move/resize/edit confirmed events
+    if(interactive){
+      if(part==="full"||part==="tail"){
+        const rz=document.createElement("div");rz.className="ev-resize";el.appendChild(rz);
+        attachResize(rz,ev,part);
+      }
+      if(part==="full"||part==="head"){
+        const rzt=document.createElement("div");rzt.className="ev-resize-top";el.appendChild(rzt);
+        attachResizeTop(rzt,ev,part);
+      }
+      if(part==="tail"){
+        el.style.cursor="pointer";
+        el.addEventListener("click",function(e){ if(e.target.classList.contains("ev-resize"))return; openModal(ev); });
+      }else{
+        attachDrag(el,ev); // drag body to move; a plain click opens edit
+      }
     }else{
-      attachDrag(el,ev); // drag body to move; a plain click opens edit
+      el.style.cursor="default"; // view-only for requesters
     }
-    // pending requests also get an Approve button (moving/resizing works like a real event)
-    if(ev.status==="pending" && part!=="tail"){
+    // Approve button: only the owner can approve a pending request
+    if(ev.status==="pending" && part!=="tail" && owner){
       const ab=document.createElement("button");ab.className="ev-approve";ab.textContent="✓ Approve";
       ab.addEventListener("pointerdown",function(e){e.stopPropagation();});
       ab.addEventListener("click",function(e){e.stopPropagation();approveEvent(ev);});
@@ -699,7 +705,7 @@
     if(dur<0) dur+=DAY_MIN; // ends the next day (overnight event)
     let status,creator;
     if(editingId){ const ex=events.find(x=>x.id===editingId)||{}; status=ex.status||"confirmed"; creator=ex.creator||""; }
-    else { status=requestMode?"pending":"confirmed"; if(!userName) promptName(); creator=userName; }
+    else { if(!userName) promptName(); status=(requestMode||!isOwner())?"pending":"confirmed"; creator=userName; }
     if(status!=="pending" && overlaps(date,start,dur,editingId)){
       alert("That time overlaps another event. Please pick a free time slot.");return;
     }
@@ -744,11 +750,18 @@
     }else{window.prompt("Copy this link:",url);}
   });
 
-  /* ---------- name / who created events ---------- */
+  /* ---------- name / roles / who created events ---------- */
+  function isOwner(){ return userName.trim().toLowerCase() === OWNER_NAME.trim().toLowerCase(); }
+  function applyRole(){
+    const owner=isOwner();
+    document.getElementById("addBtn").style.display = owner ? "" : "none"; // only owner can add real events
+    document.getElementById("reqBtn").classList.toggle("btn-primary", !owner); // requesters: make request the primary action
+    renderEvents(); // refresh approve buttons / editability for the current role
+  }
   function updateNameBtn(){ document.getElementById("nameBtn").textContent = userName ? ("You: "+userName) : "Set your name"; }
   function promptName(){
     const n=window.prompt("Your name (shown on events you create):", userName||"");
-    if(n!=null){ userName=String(n).trim(); try{localStorage.setItem("planner-user-name",userName);}catch(e){} updateNameBtn(); }
+    if(n!=null){ userName=String(n).trim(); try{localStorage.setItem("planner-user-name",userName);}catch(e){} updateNameBtn(); applyRole(); }
   }
   document.getElementById("nameBtn").addEventListener("click",promptName);
 
@@ -772,6 +785,7 @@
   buildHead();buildBody();
   updateStatus();
   updateNameBtn();
+  applyRole();
   if(!userName) promptName();
   if(useCloud){
     fetchAll();
