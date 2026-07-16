@@ -709,8 +709,13 @@
   overlay.addEventListener("click",e=>{if(e.target===overlay)closeModal();});
   document.addEventListener("keydown",e=>{
     if(!overlay.classList.contains("open"))return;
+    const ae=document.activeElement;
+    const typing=ae&&(ae.tagName==="INPUT"||ae.tagName==="SELECT"||ae.tagName==="TEXTAREA");
     if(e.key==="Escape"){closeModal();}
     else if(e.key==="Enter"){e.preventDefault();document.getElementById("saveBtn").click();}
+    else if((e.key==="Delete"||e.key==="Backspace") && editingId && !typing){
+      e.preventDefault();document.getElementById("deleteBtn").click();
+    }
   });
 
   /* ---------- share ---------- */
