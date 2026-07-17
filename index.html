@@ -99,6 +99,7 @@
     box-shadow:0 24px 60px rgba(43,39,64,.35);}
   .modal h2{font-family:var(--round);margin:0 0 16px;font-size:20px;font-weight:800;color:var(--accent);}
   .creator-line{font-size:12px;color:var(--muted);font-weight:700;margin:-8px 0 14px;}
+  .auth-msg{color:#e5397d;font-weight:700;font-size:13px;margin:-6px 0 12px;}
   .field{margin-bottom:14px;}
   .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:800;letter-spacing:.02em;}
   .field label .opt{font-weight:600;opacity:.7;}
@@ -215,6 +216,27 @@
     </div>
   </div>
 
+  <!-- Login (accounts: name + password, no email) -->
+  <div class="overlay" id="authOverlay">
+    <div class="modal">
+      <h2 id="authTitle">Log in</h2>
+      <div id="authMsg" class="auth-msg" style="display:none"></div>
+      <div class="field">
+        <label>Name</label>
+        <input type="text" id="aName" autocomplete="username" placeholder="Your name">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="aPass" autocomplete="current-password" placeholder="Your password">
+      </div>
+      <div class="modal-actions">
+        <button id="authToggle">Need an account? Sign up</button>
+        <span class="spacer"></span>
+        <button class="btn-primary" id="authSubmit">Log in</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast"></div>
 
 <!-- =====================================================================
@@ -256,6 +278,11 @@
           "Project URL" and the "anon public" key.
        4. Paste those two values into the object below, replacing the
           "PASTE_..." placeholders.
+       5. Accounts (name + password login, no email): in the dashboard go to
+          Authentication > Sign In / Providers > Email. Keep Email enabled but
+          turn OFF "Confirm email" so sign-up works instantly without an email.
+          (Each name is turned into an internal "<name>@planner.local" login id
+          for you; people only ever type a name and password.)
 
      Then deploy, open the site, click "Share link", and send it.
      Everyone who opens the link edits the same schedule, live.
@@ -334,6 +361,14 @@
     if(error){console.error("Load error:",error);toast("Load error — check table & policies.");return;}
     events=(data||[]).map(rowToEv);
     renderEvents();
+  }
+  let dataStarted=false;
+  function startData(){
+    if(dataStarted||!useCloud) return; dataStarted=true;
+    fetchAll();
+    db.channel("schedule-"+scheduleId)
+      .on("postgres_changes",{event:"*",schema:"public",table:"events",filter:"schedule_id=eq."+scheduleId},function(){fetchAll();})
+      .subscribe();
   }
 
   /* ---------- data writes (route to Supabase or localStorage) ---------- */
@@ -783,7 +818,59 @@
     const n=window.prompt("Your name (shown on events you create):", userName||"");
     if(n!=null){ userName=String(n).trim(); try{localStorage.setItem("planner-user-name",userName);}catch(e){} updateNameBtn(); applyRole(); }
   }
-  document.getElementById("nameBtn").addEventListener("click",promptName);
+  document.getElementById("nameBtn").addEventListener("click",function(){
+    if(useCloud){ if(window.confirm("Log out?")){ db.auth.signOut().then(function(){location.reload();}); } }
+    else { promptName(); }
+  });
+
+  /* ---------- accounts: name + password via Supabase Auth (no email) ---------- */
+  let authMode="login";
+  // Turn a display name into a stable internal login id (Supabase needs an email-shaped value).
+  function slugEmail(name){ const s=name.trim().toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,""); return (s||"user")+"@planner.local"; }
+  function displayNameFromSession(s){ try{ return (s.user.user_metadata&&s.user.user_metadata.display_name)||String(s.user.email||"").split("@")[0]; }catch(e){ return ""; } }
+  function showAuthMsg(m){ const el=document.getElementById("authMsg"); el.textContent=m||""; el.style.display=m?"block":"none"; }
+  function setAuthMode(m){
+    authMode=m;
+    document.getElementById("authTitle").textContent = m==="signup"?"Create account":"Log in";
+    document.getElementById("authSubmit").textContent = m==="signup"?"Sign up":"Log in";
+    document.getElementById("authToggle").textContent = m==="signup"?"Have an account? Log in":"Need an account? Sign up";
+    showAuthMsg("");
+  }
+  function showAuth(){ setAuthMode("login"); document.getElementById("authOverlay").classList.add("open"); setTimeout(function(){document.getElementById("aName").focus();},50); }
+  function hideAuth(){ document.getElementById("authOverlay").classList.remove("open"); showAuthMsg(""); }
+  async function submitAuth(){
+    const name=document.getElementById("aName").value.trim();
+    const pass=document.getElementById("aPass").value;
+    if(!name||!pass){ showAuthMsg("Enter a name and password."); return; }
+    const email=slugEmail(name);
+    showAuthMsg("Please wait…");
+    try{
+      let res;
+      if(authMode==="signup"){
+        if(pass.length<6){ showAuthMsg("Password must be at least 6 characters."); return; }
+        res=await db.auth.signUp({email:email,password:pass,options:{data:{display_name:name}}});
+        if(res.error){ showAuthMsg(res.error.message); return; }
+        if(!(res.data&&res.data.session)){ // email confirmation likely on; try signing in
+          res=await db.auth.signInWithPassword({email:email,password:pass});
+          if(res.error){ showAuthMsg("Account created, but couldn't sign in. Disable 'Confirm email' in Supabase, then log in."); return; }
+        }
+      }else{
+        res=await db.auth.signInWithPassword({email:email,password:pass});
+        if(res.error){ showAuthMsg("Wrong name or password."); return; }
+      }
+      onLoggedIn(name);
+    }catch(e){ showAuthMsg("Something went wrong. Please try again."); }
+  }
+  function onLoggedIn(name){
+    userName=name||"";
+    try{localStorage.setItem("planner-user-name",userName);}catch(e){}
+    hideAuth();
+    updateNameBtn(); applyRole();
+    startData();
+  }
+  document.getElementById("authSubmit").addEventListener("click",submitAuth);
+  document.getElementById("authToggle").addEventListener("click",function(){ setAuthMode(authMode==="signup"?"login":"signup"); });
+  document.getElementById("authOverlay").addEventListener("keydown",function(e){ if(e.key==="Enter"){ e.preventDefault(); submitAuth(); } });
 
   /* ---------- status ---------- */
   function updateStatus(){
@@ -806,14 +893,14 @@
   updateStatus();
   updateNameBtn();
   applyRole();
-  if(!userName) promptName();
   if(useCloud){
-    fetchAll();
-    db.channel("schedule-"+scheduleId)
-      .on("postgres_changes",
-          {event:"*",schema:"public",table:"events",filter:"schedule_id=eq."+scheduleId},
-          function(){ fetchAll(); })
-      .subscribe();
+    db.auth.getSession().then(function(res){
+      const s=res&&res.data&&res.data.session;
+      if(s){ onLoggedIn(displayNameFromSession(s)); }
+      else { userName=""; updateNameBtn(); applyRole(); showAuth(); }
+    });
+  }else{
+    if(!userName) promptName(); // solo/local mode keeps the simple name prompt
   }
   document.querySelector(".cal-wrap").scrollTop=7*HOUR_H;
 })();
