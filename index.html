@@ -281,8 +281,8 @@
        5. Accounts (name + password login, no email): in the dashboard go to
           Authentication > Sign In / Providers > Email. Keep Email enabled but
           turn OFF "Confirm email" so sign-up works instantly without an email.
-          (Each name is turned into an internal "<name>@planner.local" login id
-          for you; people only ever type a name and password.)
+          (Each name is turned into an internal "<name>@planner-app.example.com"
+          login id for you; people only ever type a name and password.)
 
      Then deploy, open the site, click "Share link", and send it.
      Everyone who opens the link edits the same schedule, live.
@@ -826,7 +826,7 @@
   /* ---------- accounts: name + password via Supabase Auth (no email) ---------- */
   let authMode="login";
   // Turn a display name into a stable internal login id (Supabase needs an email-shaped value).
-  function slugEmail(name){ const s=name.trim().toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,""); return (s||"user")+"@planner.local"; }
+  function slugEmail(name){ const s=name.trim().toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,""); return (s||"user")+"@planner-app.example.com"; }
   function displayNameFromSession(s){ try{ return (s.user.user_metadata&&s.user.user_metadata.display_name)||String(s.user.email||"").split("@")[0]; }catch(e){ return ""; } }
   function showAuthMsg(m){ const el=document.getElementById("authMsg"); el.textContent=m||""; el.style.display=m?"block":"none"; }
   function setAuthMode(m){
