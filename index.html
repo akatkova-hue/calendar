@@ -511,8 +511,9 @@
     el.innerHTML=html;
     if(ev.status==="pending") el.classList.add("pending");
     const owner=isOwner();
-    const interactive=(ev.status==="pending")||owner; // requesters can't move/resize/edit confirmed events
-    if(interactive){
+    const mine=!!userName && ev.creator===userName;
+    const canEdit=owner || (ev.status==="pending" && mine); // requesters may edit only their OWN pending requests
+    if(canEdit){
       if(part==="full"||part==="tail"){
         const rz=document.createElement("div");rz.className="ev-resize";el.appendChild(rz);
         attachResize(rz,ev,part);
